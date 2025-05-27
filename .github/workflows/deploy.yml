@@ -1,0 +1,75 @@
+name: Deploy to Render on Push to Main
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    name: 🚀 Deploy to Render
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 📥 Checkout Code
+        uses: actions/checkout@v3
+
+      - name: 🟢 Set up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: 18
+
+      - name: 🚀 Trigger Deploy on Render
+        id: trigger
+        run: |
+          RESPONSE=$(curl -s -X POST https://api.render.com/v1/services/${{ secrets.RENDER_SERVICE_ID }}/deploys \
+            -H "Authorization: Bearer ${{ secrets.RENDER_API_KEY }}" \
+            -H "Accept: application/json")
+
+          echo "🧾 Raw API Response:"
+          echo "$RESPONSE"
+
+          DEPLOY_ID=$(echo "$RESPONSE" | jq -r '.id')
+
+          if [ "$DEPLOY_ID" == "null" ] || [ -z "$DEPLOY_ID" ]; then
+            echo "❌ Failed to get deploy ID from Render API."
+            exit 1
+          fi
+
+          echo "✅ Triggered deploy ID: $DEPLOY_ID"
+          echo "deploy_id=$DEPLOY_ID" >> $GITHUB_OUTPUT
+
+      - name: 🕒 Wait for Render Deployment to Finish
+        run: |
+          echo "📡 Polling deploy status from Render..."
+
+          for i in {1..30}; do
+            RESPONSE=$(curl -s https://api.render.com/v1/services/${{ secrets.RENDER_SERVICE_ID }}/deploys/${{ steps.trigger.outputs.deploy_id }} \
+              -H "Authorization: Bearer ${{ secrets.RENDER_API_KEY }}" \
+              -H "Accept: application/json")
+
+            STATUS=$(echo "$RESPONSE" | jq -r 'try .status // "unknown"')
+
+            if [[ "$STATUS" == "live" ]]; then
+              echo ""
+              echo "✅ Deployment successful!"
+              echo "🔗 View full logs on Render:"
+              echo "👉 https://dashboard.render.com/web/${{ secrets.RENDER_SERVICE_ID }}"
+              exit 0
+            elif [[ "$STATUS" == "failed" ]]; then
+              echo ""
+              echo "❌ Deployment failed!"
+              echo "🔗 View error logs on Render:"
+              echo "👉 https://dashboard.render.com/web/${{ secrets.RENDER_SERVICE_ID }}"
+              exit 1
+            else
+              echo "⏳ Status: $STATUS — waiting..."
+              sleep 10
+            fi
+          done
+
+          echo ""
+          echo "❌ Timed out waiting for deployment status to finish."
+          echo "🔗 Check Render for more info:"
+          echo "👉 https://dashboard.render.com/web/${{ secrets.RENDER_SERVICE_ID }}"
+          exit 1
